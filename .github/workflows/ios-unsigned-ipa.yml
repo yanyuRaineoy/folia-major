@@ -1,0 +1,76 @@
+# 打未签名的 Folia iOS IPA（手动触发）
+#
+# 背景：
+# - iOS 应用的编译只能在 macOS + Xcode 上完成，Linux/Windows 本地编不了。
+# - 这条流水线跑在 GitHub Actions 的 macOS runner 上，产物是「未签名」的 .ipa，
+#   下载后用 Sideloadly / AltStore（电脑 + Apple ID 自签）或 TrollStore 安装。
+#
+# 使用方法（在你 fork 的仓库里）：
+# 1. 把本仓库的 capacitor.config.json、ios/ 目录、本文件一起推进你的 fork。
+# 2. 打开仓库的 Actions 页面，左侧选 "Build unsigned iOS IPA"，点 "Run workflow"。
+# 3. 跑完后在页面底部的 Artifacts 里下载 Folia-unsigned-ipa，解压得到 .ipa。
+# 4. 用 Sideloadly / AltStore 给它签名并装到 iPhone 上。
+#
+# 注意：
+# - 未签名的包无法直接安装，必须经过你自己的签名步骤。
+# - Bundle ID 是 top.izuna.foliamajor（与作者 Android 示范版一致），
+#   如需改成你自己的，在 capacitor.config.json 里改 appId 后重跑 npx cap sync ios。
+
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Sync to iOS project
+        run: |
+          # runner 上现场生成 iOS 壳（npx cap add ios 只需要 capacitor.config.json，
+          # 在 macOS 上跑；之后把 dist/ 同步进去）
+          npx cap add ios
+          npx cap sync ios
+
+      - name: Build unsigned .app (no code signing)
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj \
+            -target App \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "${{ runner.temp }}/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="${{ runner.temp }}/build/Build/Products/Release-iphoneos/App.app"
+          test -d "$APP_PATH" || { echo "App.app not found at $APP_PATH"; exit 1; }
+          mkdir -p "${{ runner.temp }}/ipa/Payload"
+          cp -R "$APP_PATH" "${{ runner.temp }}/ipa/Payload/"
+          cd "${{ runner.temp }}/ipa"
+          zip -qr Folia-unsigned.ipa Payload
+          ls -lh Folia-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Folia-unsigned-ipa
+          path: ${{ runner.temp }}/ipa/Folia-unsigned.ipa
+          if-no-files-found: error
