@@ -48,23 +48,34 @@ jobs:
           npx cap sync ios
 
       - name: Build unsigned .app (no code signing)
+        # 注意：xcodebuild 在指定 -derivedDataPath 时强制要求 -scheme，
+        # 而 Capacitor 生成的工程没有共享 scheme（.xcscheme），CI 上是干净检出，
+        # 所以这里用 -target 编译，再用 -showBuildSettings 定位产物，不指定 derivedDataPath。
         run: |
           xcodebuild -project ios/App/App.xcodeproj \
             -target App \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath "${{ runner.temp }}/build" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             build
 
       - name: Package unsigned IPA
         run: |
-          APP_PATH="${{ runner.temp }}/build/Build/Products/Release-iphoneos/App.app"
-          test -d "$APP_PATH" || { echo "App.app not found at $APP_PATH"; exit 1; }
-          mkdir -p "${{ runner.temp }}/ipa/Payload"
-          cp -R "$APP_PATH" "${{ runner.temp }}/ipa/Payload/"
-          cd "${{ runner.temp }}/ipa"
+          SETTINGS=$(xcodebuild -project ios/App/App.xcodeproj \
+            -target App \
+            -configuration Release \
+            -sdk iphoneos \
+            -showBuildSettings \
+            CODE_SIGNING_ALLOWED=NO)
+          BUILT_PRODUCTS_DIR=$(echo "$SETTINGS" | grep -m1 " BUILT_PRODUCTS_DIR =" | sed 's/.*= //')
+          FULL_PRODUCT_NAME=$(echo "$SETTINGS" | grep -m1 " FULL_PRODUCT_NAME =" | sed 's/.*= //')
+          APP_PATH="$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME"
+          test -d "$APP_PATH" || { echo "App not found at $APP_PATH"; exit 1; }
+          echo "Found app: $APP_PATH"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
           zip -qr Folia-unsigned.ipa Payload
           ls -lh Folia-unsigned.ipa
 
